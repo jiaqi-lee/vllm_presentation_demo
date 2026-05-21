@@ -34,6 +34,40 @@ pip install -r requirements.txt
 
 ## Usage
 
+### Web UI (recommended for end users)
+
+**Local PC + two remote vLLM servers (side-by-side comparison)**
+
+Run `web_demo.py` on your **local exhibition PC**. The browser only connects to
+`localhost`; this process forwards each prompt to both remote backends in
+parallel:
+
+```bash
+python web_demo.py \
+  --url-top http://199.147.1.2:8004 \
+  --url-bottom http://199.147.1.3:8004 \
+  --model minimax
+```
+
+Open **http://127.0.0.1:8765** on the same PC. The page is split vertically:
+upper panel = `199.147.1.2`, lower panel = `199.147.1.3`. One question is sent
+to both servers at once so the audience can compare streaming speed and the
+per-request `ais_bench` table.
+
+**Connectivity checklist**
+
+1. vLLM must already be listening on `8004` on both remote machines.
+2. From the local PC, verify reachability, e.g. `curl http://199.147.1.2:8004/v1/models`
+   and the same for `.1.3` (firewall / VPN / routing must allow it).
+3. Start `web_demo.py` on the local PC; do **not** open the HTML file directly
+   (`file://`) — always use the URL printed by the server so WebSocket works.
+
+The terminal REPL (`python demo.py`) is unchanged and talks to a single backend.
+
+Other flags (`--max-tokens`, `--temperature`, `--port`, …) match the terminal demo.
+
+### Terminal REPL (developers / shell)
+
 Start the REPL against the default endpoint:
 
 ```bash
@@ -126,12 +160,17 @@ always reflect the true server-to-client timings.
 vllm_presentation_demo/
 ├── README.md
 ├── requirements.txt
-├── demo.py
+├── demo.py              # terminal entry (unchanged)
+├── web_demo.py          # browser entry
 └── presentation_demo/
     ├── __init__.py
     ├── config.py        # CLI + DemoConfig
     ├── client.py        # async SSE streaming client + producer/consumer
     ├── metrics.py       # ais_bench-compatible per-request metric computation
     ├── table.py         # tabulate fancy_grid rendering of two ais_bench-style tables
-    └── repl.py          # REPL main loop and control commands
+    ├── repl.py          # REPL main loop and control commands
+    ├── web_server.py    # FastAPI app + WebSocket protocol
+    ├── web_sink.py      # TextIO adapter for web token forwarding
+    └── static/
+        └── index.html   # chat UI
 ```

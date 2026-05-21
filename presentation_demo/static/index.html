@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>vLLM-Ascend 双机对比演示</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #eef1f8;
+      --surface: #ffffff;
+      --border: #dde3ef;
+      --text: #0f172a;
+      --text-muted: #64748b;
+      --accent-top: #4f46e5;
+      --accent-bottom: #0891b2;
+      --shadow: 0 2px 12px rgba(15, 23, 42, 0.06);
+      --radius: 12px;
+      --danger: #dc2626;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: "DM Sans", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .app-header {
+      flex-shrink: 0;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0.75rem 1.25rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      box-shadow: var(--shadow);
+    }
+
+    .brand h1 { font-size: 1rem; font-weight: 700; }
+    .brand p { font-size: 0.75rem; color: var(--text-muted); }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.3rem 0.7rem;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      background: #eef2ff;
+      color: var(--accent-top);
+    }
+
+    .status-pill::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .status-pill.disconnected { background: #fef2f2; color: var(--danger); }
+    .status-pill.streaming::before { animation: pulse 1s ease-in-out infinite; }
+
+    @keyframes pulse {
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
+
+    .compare-layout {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      gap: 0;
+    }
+
+    .server-panel {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--surface);
+      border-bottom: 2px solid var(--border);
+    }
+
+    .server-panel:last-of-type { border-bottom: none; }
+
+    .panel-header {
+      flex-shrink: 0;
+      padding: 0.5rem 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-weight: 600;
+      font-size: 0.85rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .server-panel[data-panel="top"] .panel-header {
+      background: linear-gradient(90deg, #eef2ff, #fff);
+      color: var(--accent-top);
+    }
+
+    .server-panel[data-panel="bottom"] .panel-header {
+      background: linear-gradient(90deg, #ecfeff, #fff);
+      color: var(--accent-bottom);
+    }
+
+    .panel-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .panel-status {
+      margin-left: auto;
+      font-size: 0.7rem;
+      font-weight: 500;
+      color: var(--text-muted);
+    }
+
+    .panel-status.busy { color: inherit; }
+    .panel-status.error { color: var(--danger); }
+
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.75rem 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+      scroll-behavior: smooth;
+    }
+
+    .welcome {
+      text-align: center;
+      padding: 1.5rem 1rem;
+      color: var(--text-muted);
+      font-size: 0.82rem;
+      line-height: 1.5;
+    }
+
+    .msg {
+      display: flex;
+      flex-direction: column;
+      max-width: 92%;
+      animation: fadeIn 0.2s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .msg.user { align-self: flex-end; align-items: flex-end; }
+    .msg.assistant { align-self: flex-start; }
+
+    .msg-label {
+      font-size: 0.65rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 0.25rem;
+    }
+
+    .bubble {
+      padding: 0.65rem 0.9rem;
+      border-radius: var(--radius);
+      line-height: 1.55;
+      font-size: 0.88rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+      border: 1px solid var(--border);
+      background: #fafbff;
+    }
+
+    .msg.user .bubble {
+      background: #f1f5f9;
+      border-color: #e2e8f0;
+    }
+
+    .bubble.streaming::after {
+      content: "▋";
+      animation: blink 0.8s step-end infinite;
+      margin-left: 2px;
+    }
+
+    .server-panel[data-panel="top"] .bubble.streaming::after { color: var(--accent-top); }
+    .server-panel[data-panel="bottom"] .bubble.streaming::after { color: var(--accent-bottom); }
+
+    @keyframes blink { 50% { opacity: 0; } }
+
+    .metrics-card {
+      margin-top: 0.5rem;
+      background: #0f172a;
+      color: #e2e8f0;
+      border-radius: 8px;
+      padding: 0.65rem 0.75rem;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.62rem;
+      line-height: 1.4;
+      overflow-x: auto;
+      white-space: pre;
+    }
+
+    .metrics-card .title {
+      color: #94a3b8;
+      font-size: 0.58rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 0.4rem;
+      font-family: "DM Sans", sans-serif;
+    }
+
+    .input-bar {
+      flex-shrink: 0;
+      padding: 0.65rem 1rem;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.06);
+    }
+
+    .input-area {
+      display: flex;
+      gap: 0.5rem;
+      align-items: flex-end;
+      max-width: 960px;
+      margin: 0 auto;
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 0.5rem 0.65rem;
+    }
+
+    .input-hint {
+      text-align: center;
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      margin-top: 0.35rem;
+    }
+
+    #promptInput {
+      flex: 1;
+      border: none;
+      outline: none;
+      resize: none;
+      font-family: inherit;
+      font-size: 0.9rem;
+      line-height: 1.45;
+      max-height: 100px;
+      min-height: 38px;
+      padding: 0.35rem;
+      background: transparent;
+    }
+
+    .btn {
+      border: none;
+      cursor: pointer;
+      font-family: inherit;
+      font-weight: 600;
+      font-size: 0.8rem;
+      border-radius: 8px;
+      padding: 0.5rem 0.9rem;
+    }
+
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .btn-primary { background: var(--accent-top); color: white; }
+    .btn-ghost { background: transparent; color: var(--text-muted); }
+
+    .error-toast {
+      position: fixed;
+      bottom: 4.5rem;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #fef2f2;
+      color: var(--danger);
+      border: 1px solid #fecaca;
+      padding: 0.6rem 1rem;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      z-index: 100;
+      display: none;
+      max-width: 92%;
+    }
+
+    .error-toast.visible { display: block; }
+  </style>
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <h1>vLLM-Ascend 双机流式对比</h1>
+      <p>同一问题同时发往两台远程服务，上下分屏对比速度与性能表</p>
+    </div>
+    <span id="statusPill" class="status-pill disconnected">连接本地代理…</span>
+  </header>
+
+  <div class="compare-layout">
+    <section class="server-panel" data-panel="top">
+      <div class="panel-header">
+        <span class="panel-dot"></span>
+        <span id="labelTop">199.147.1.2:8004</span>
+        <span id="statusTop" class="panel-status">待命</span>
+      </div>
+      <div id="messagesTop" class="messages">
+        <div class="welcome">上方：第一台 vLLM 服务。发送问题后此处流式显示回复与性能表。</div>
+      </div>
+    </section>
+
+    <section class="server-panel" data-panel="bottom">
+      <div class="panel-header">
+        <span class="panel-dot"></span>
+        <span id="labelBottom">199.147.1.3:8004</span>
+        <span id="statusBottom" class="panel-status">待命</span>
+      </div>
+      <div id="messagesBottom" class="messages">
+        <div class="welcome">下方：第二台 vLLM 服务。可与上方直观对比吐字快慢。</div>
+      </div>
+    </section>
+  </div>
+
+  <footer class="input-bar">
+    <form id="chatForm" class="input-area">
+      <textarea id="promptInput" rows="1" placeholder="输入问题，将同时发送到上下两台服务器（Enter 发送）" autocomplete="off"></textarea>
+      <button type="button" id="stopBtn" class="btn btn-ghost" disabled>停止</button>
+      <button type="submit" id="sendBtn" class="btn btn-primary" disabled>同时发送</button>
+    </form>
+    <p class="input-hint">浏览器只连接本机 web_demo；由本机程序转发到远程 8004 端口（无需浏览器直连远程 IP）</p>
+  </footer>
+
+  <div id="errorToast" class="error-toast" role="alert"></div>
+
+  <script>
+    const PANELS = {
+      top: {
+        messagesEl: document.getElementById("messagesTop"),
+        statusEl: document.getElementById("statusTop"),
+        labelEl: document.getElementById("labelTop"),
+        assistantBubble: null,
+        pending: false,
+      },
+      bottom: {
+        messagesEl: document.getElementById("messagesBottom"),
+        statusEl: document.getElementById("statusBottom"),
+        labelEl: document.getElementById("labelBottom"),
+        assistantBubble: null,
+        pending: false,
+      },
+    };
+
+    const promptInput = document.getElementById("promptInput");
+    const chatForm = document.getElementById("chatForm");
+    const sendBtn = document.getElementById("sendBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const statusPill = document.getElementById("statusPill");
+    const errorToast = document.getElementById("errorToast");
+
+    let ws = null;
+    let globalBusy = false;
+    let pendingCount = 0;
+    let toastTimer = null;
+
+    function setGlobalStatus(text, cls) {
+      statusPill.textContent = text;
+      statusPill.className = "status-pill " + (cls || "");
+    }
+
+    function setPanelStatus(panelId, text, cls) {
+      const el = PANELS[panelId].statusEl;
+      el.textContent = text;
+      el.className = "panel-status " + (cls || "");
+    }
+
+    function showError(msg, panel) {
+      const prefix = panel ? `[${panel}] ` : "";
+      errorToast.textContent = prefix + msg;
+      errorToast.classList.add("visible");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => errorToast.classList.remove("visible"), 6000);
+    }
+
+    function updateBusyState() {
+      globalBusy = pendingCount > 0;
+      sendBtn.disabled = globalBusy || !ws || ws.readyState !== WebSocket.OPEN;
+      stopBtn.disabled = !globalBusy;
+      promptInput.disabled = globalBusy;
+      setGlobalStatus(
+        globalBusy ? "双机生成中…" : "已就绪",
+        globalBusy ? "streaming" : (ws && ws.readyState === WebSocket.OPEN ? "" : "disconnected")
+      );
+    }
+
+    function clearWelcome(panelId) {
+      const el = PANELS[panelId].messagesEl;
+      const w = el.querySelector(".welcome");
+      if (w) w.remove();
+    }
+
+    function appendUserMessage(panelId, text) {
+      clearWelcome(panelId);
+      const wrap = document.createElement("div");
+      wrap.className = "msg user";
+      wrap.innerHTML = '<span class="msg-label">您</span><div class="bubble"></div>';
+      wrap.querySelector(".bubble").textContent = text;
+      PANELS[panelId].messagesEl.appendChild(wrap);
+      PANELS[panelId].messagesEl.scrollTop = PANELS[panelId].messagesEl.scrollHeight;
+    }
+
+    function beginAssistant(panelId) {
+      clearWelcome(panelId);
+      const wrap = document.createElement("div");
+      wrap.className = "msg assistant";
+      wrap.innerHTML = '<span class="msg-label">模型</span><div class="bubble streaming"></div>';
+      PANELS[panelId].messagesEl.appendChild(wrap);
+      PANELS[panelId].assistantBubble = wrap.querySelector(".bubble");
+      PANELS[panelId].messagesEl.scrollTop = PANELS[panelId].messagesEl.scrollHeight;
+    }
+
+    function appendToken(panelId, text) {
+      const p = PANELS[panelId];
+      if (!p.assistantBubble) beginAssistant(panelId);
+      p.assistantBubble.textContent += text;
+      p.messagesEl.scrollTop = p.messagesEl.scrollHeight;
+    }
+
+    function finishAssistant(panelId, table) {
+      const p = PANELS[panelId];
+      if (p.assistantBubble) p.assistantBubble.classList.remove("streaming");
+      if (table && p.assistantBubble) {
+        const card = document.createElement("div");
+        card.className = "metrics-card";
+        card.innerHTML = '<div class="title">性能指标 (ais_bench)</div>';
+        const pre = document.createElement("pre");
+        pre.textContent = table;
+        card.appendChild(pre);
+        p.assistantBubble.closest(".msg").appendChild(card);
+      }
+      p.assistantBubble = null;
+      p.messagesEl.scrollTop = p.messagesEl.scrollHeight;
+    }
+
+    function panelDone(panelId) {
+      PANELS[panelId].pending = false;
+      pendingCount = Math.max(0, pendingCount - 1);
+      setPanelStatus(panelId, "完成", "");
+      updateBusyState();
+    }
+
+    function applyConfig(data) {
+      if (!data || !data.panels) return;
+      for (const [id, cfg] of Object.entries(data.panels)) {
+        if (PANELS[id] && cfg.label) PANELS[id].labelEl.textContent = cfg.label;
+      }
+    }
+
+    async function loadConfig() {
+      try {
+        const res = await fetch("/api/config");
+        if (res.ok) applyConfig(await res.json());
+      } catch (_) {}
+    }
+
+    function connect() {
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      ws = new WebSocket(proto + "//" + location.host + "/ws");
+
+      ws.onopen = () => {
+        setGlobalStatus("已就绪", "");
+        sendBtn.disabled = false;
+        ws.send(JSON.stringify({ action: "config" }));
+      };
+
+      ws.onclose = () => {
+        setGlobalStatus("已断开", "disconnected");
+        sendBtn.disabled = true;
+        pendingCount = 0;
+        updateBusyState();
+        setTimeout(connect, 2000);
+      };
+
+      ws.onmessage = (ev) => {
+        let msg;
+        try { msg = JSON.parse(ev.data); } catch { return; }
+
+        const panel = msg.panel;
+        if (!panel || !PANELS[panel]) {
+          if (msg.type === "error" && !panel) showError(msg.message || "错误");
+          return;
+        }
+
+        switch (msg.type) {
+          case "start":
+            PANELS[panel].pending = true;
+            pendingCount++;
+            updateBusyState();
+            setPanelStatus(panel, "生成中…", "busy");
+            beginAssistant(panel);
+            break;
+          case "token":
+            appendToken(panel, msg.text || "");
+            break;
+          case "done":
+            finishAssistant(panel, msg.table || "");
+            panelDone(panel);
+            break;
+          case "cancelled":
+            if (PANELS[panel].assistantBubble) {
+              PANELS[panel].assistantBubble.classList.remove("streaming");
+              PANELS[panel].assistantBubble.textContent += "\n\n[已停止]";
+            }
+            PANELS[panel].assistantBubble = null;
+            panelDone(panel);
+            break;
+          case "error":
+            showError(msg.message || "错误", panel);
+            setPanelStatus(panel, "失败", "error");
+            if (PANELS[panel].assistantBubble) {
+              PANELS[panel].assistantBubble.classList.remove("streaming");
+              PANELS[panel].assistantBubble.textContent += "\n\n[错误] " + (msg.message || "");
+              PANELS[panel].assistantBubble = null;
+            }
+            if (PANELS[panel].pending) panelDone(panel);
+            break;
+          case "config":
+            if (msg.data) applyConfig(msg.data);
+            break;
+        }
+      };
+    }
+
+    chatForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const text = promptInput.value.trim();
+      if (!text || !ws || ws.readyState !== WebSocket.OPEN || globalBusy) return;
+      appendUserMessage("top", text);
+      appendUserMessage("bottom", text);
+      ws.send(JSON.stringify({ action: "chat", prompt: text }));
+      promptInput.value = "";
+      promptInput.style.height = "auto";
+    });
+
+    stopBtn.addEventListener("click", () => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: "cancel" }));
+      }
+    });
+
+    promptInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        chatForm.requestSubmit();
+      }
+    });
+
+    promptInput.addEventListener("input", () => {
+      promptInput.style.height = "auto";
+      promptInput.style.height = Math.min(promptInput.scrollHeight, 100) + "px";
+    });
+
+    loadConfig();
+    connect();
+  </script>
+</body>
+</html>
