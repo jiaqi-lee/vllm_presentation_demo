@@ -43,6 +43,9 @@ class DemoConfig:
     temperature: float = DEFAULT_TEMPERATURE
     enable_thinking: bool = DEFAULT_ENABLE_THINKING
     timeout: float = DEFAULT_TIMEOUT
+    # When False (default), httpx ignores HTTP_PROXY/HTTPS_PROXY so LAN IPs
+    # like 199.147.x.x are contacted directly from the exhibition PC.
+    trust_env: bool = False
     extra_generation_kwargs: Dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -163,6 +166,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=DEFAULT_TIMEOUT,
         help=f"HTTP read timeout in seconds (default: {DEFAULT_TIMEOUT}).",
     )
+    parser.add_argument(
+        "--use-system-proxy",
+        action="store_true",
+        help="Use HTTP_PROXY/HTTPS_PROXY from the environment. Default is off so "
+        "LAN IPs (e.g. 199.147.x.x) are contacted directly.",
+    )
     return parser
 
 
@@ -174,4 +183,5 @@ def config_from_args(args: argparse.Namespace) -> DemoConfig:
         temperature=args.temperature,
         enable_thinking=args.enable_thinking,
         timeout=args.timeout,
+        trust_env=getattr(args, "use_system_proxy", False),
     )

@@ -4,9 +4,6 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>vLLM-Ascend 双机对比演示</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <style>
     :root {
       --bg: #eef1f8;
@@ -24,7 +21,7 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
-      font-family: "DM Sans", system-ui, sans-serif;
+      font-family: "Microsoft YaHei", "微软雅黑", sans-serif;
       background: var(--bg);
       color: var(--text);
       height: 100vh;
@@ -131,6 +128,23 @@
 
     .panel-status.busy { color: inherit; }
     .panel-status.error { color: var(--danger); }
+    .panel-status.ok { color: #059669; }
+    .panel-status.checking { color: var(--text-muted); }
+
+    .health-banner {
+      flex-shrink: 0;
+      margin: 0 1rem 0.35rem;
+      padding: 0.45rem 0.65rem;
+      border-radius: 8px;
+      font-size: 0.72rem;
+      line-height: 1.45;
+      display: none;
+    }
+
+    .health-banner.visible { display: block; }
+    .health-banner.ok { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+    .health-banner.warn { background: #fffbeb; color: #b45309; border: 1px solid #fde68a; }
+    .health-banner.fail { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
 
     .messages {
       flex: 1;
@@ -207,11 +221,38 @@
       color: #e2e8f0;
       border-radius: 8px;
       padding: 0.65rem 0.75rem;
-      font-family: "JetBrains Mono", monospace;
+      font-family: "Microsoft YaHei", "微软雅黑", sans-serif;
       font-size: 0.62rem;
       line-height: 1.4;
       overflow-x: auto;
-      white-space: pre;
+    }
+
+    .metrics-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: inherit;
+      line-height: inherit;
+    }
+
+    .metrics-table th,
+    .metrics-table td {
+      border: 1px solid #475569;
+      padding: 0.3rem 0.45rem;
+    }
+
+    .metrics-table th {
+      background: #1e293b;
+      color: #94a3b8;
+      font-weight: 600;
+      text-align: left;
+    }
+
+    .metrics-table td:first-child {
+      text-align: left;
+    }
+
+    .metrics-table td:last-child {
+      text-align: center;
     }
 
     .metrics-card .title {
@@ -220,7 +261,6 @@
       text-transform: uppercase;
       letter-spacing: 0.06em;
       margin-bottom: 0.4rem;
-      font-family: "DM Sans", sans-serif;
     }
 
     .input-bar {
@@ -307,11 +347,13 @@
     <span id="statusPill" class="status-pill disconnected">连接本地代理…</span>
   </header>
 
+  <div id="healthBanner" class="health-banner" role="status"></div>
+
   <div class="compare-layout">
     <section class="server-panel" data-panel="top">
       <div class="panel-header">
         <span class="panel-dot"></span>
-        <span id="labelTop">199.147.1.2:8004</span>
+        <span id="labelTop">不开启特性</span>
         <span id="statusTop" class="panel-status">待命</span>
       </div>
       <div id="messagesTop" class="messages">
@@ -322,7 +364,7 @@
     <section class="server-panel" data-panel="bottom">
       <div class="panel-header">
         <span class="panel-dot"></span>
-        <span id="labelBottom">199.147.1.3:8004</span>
+        <span id="labelBottom">开启特性后</span>
         <span id="statusBottom" class="panel-status">待命</span>
       </div>
       <div id="messagesBottom" class="messages">
@@ -334,7 +376,6 @@
   <footer class="input-bar">
     <form id="chatForm" class="input-area">
       <textarea id="promptInput" rows="1" placeholder="输入问题，将同时发送到上下两台服务器（Enter 发送）" autocomplete="off"></textarea>
-      <button type="button" id="stopBtn" class="btn btn-ghost" disabled>停止</button>
       <button type="submit" id="sendBtn" class="btn btn-primary" disabled>同时发送</button>
     </form>
     <p class="input-hint">浏览器只连接本机 web_demo；由本机程序转发到远程 8004 端口（无需浏览器直连远程 IP）</p>
@@ -363,9 +404,9 @@
     const promptInput = document.getElementById("promptInput");
     const chatForm = document.getElementById("chatForm");
     const sendBtn = document.getElementById("sendBtn");
-    const stopBtn = document.getElementById("stopBtn");
     const statusPill = document.getElementById("statusPill");
     const errorToast = document.getElementById("errorToast");
+    const healthBanner = document.getElementById("healthBanner");
 
     let ws = null;
     let globalBusy = false;
@@ -394,7 +435,6 @@
     function updateBusyState() {
       globalBusy = pendingCount > 0;
       sendBtn.disabled = globalBusy || !ws || ws.readyState !== WebSocket.OPEN;
-      stopBtn.disabled = !globalBusy;
       promptInput.disabled = globalBusy;
       setGlobalStatus(
         globalBusy ? "双机生成中…" : "已就绪",
@@ -435,16 +475,39 @@
       p.messagesEl.scrollTop = p.messagesEl.scrollHeight;
     }
 
-    function finishAssistant(panelId, table) {
+    function renderMetricsTable(metrics) {
+      if (!metrics) return null;
+      const rows = [
+        ["E2EL", `${metrics.e2el_ms} ms`],
+        ["TTFT", `${metrics.ttft_ms} ms`],
+        ["TPOT", `${metrics.tpot_ms} ms`],
+        ["Total Input Tokens", String(metrics.input_tokens)],
+        ["Total Generated Tokens", String(metrics.output_tokens)],
+        ["Request Throughput", `${metrics.request_throughput} req/s`],
+        ["Total Token Throughput", `${metrics.total_token_throughput} token/s`],
+      ];
+      const table = document.createElement("table");
+      table.className = "metrics-table";
+      table.innerHTML = "<thead><tr><th>Common Metric</th><th>Value</th></tr></thead>";
+      const tbody = document.createElement("tbody");
+      for (const [label, value] of rows) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${label}</td><td>${value}</td>`;
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      return table;
+    }
+
+    function finishAssistant(panelId, metrics) {
       const p = PANELS[panelId];
       if (p.assistantBubble) p.assistantBubble.classList.remove("streaming");
-      if (table && p.assistantBubble) {
+      if (metrics && p.assistantBubble) {
         const card = document.createElement("div");
         card.className = "metrics-card";
         card.innerHTML = '<div class="title">性能指标 (ais_bench)</div>';
-        const pre = document.createElement("pre");
-        pre.textContent = table;
-        card.appendChild(pre);
+        const table = renderMetricsTable(metrics);
+        if (table) card.appendChild(table);
         p.assistantBubble.closest(".msg").appendChild(card);
       }
       p.assistantBubble = null;
@@ -470,6 +533,43 @@
         const res = await fetch("/api/config");
         if (res.ok) applyConfig(await res.json());
       } catch (_) {}
+    }
+
+    async function loadHealth() {
+      for (const id of ["top", "bottom"]) {
+        setPanelStatus(id, "检测中…", "checking");
+      }
+      try {
+        const res = await fetch("/api/health");
+        if (!res.ok) throw new Error("health API " + res.status);
+        const data = await res.json();
+        const panels = data.panels || {};
+        let allOk = true;
+        const hints = [];
+        for (const [id, r] of Object.entries(panels)) {
+          if (!PANELS[id]) continue;
+          if (r.ok) {
+            setPanelStatus(id, "后端可达", "ok");
+            if (r.hint) hints.push(`${id}: ${r.hint}`);
+          } else {
+            allOk = false;
+            setPanelStatus(id, "后端不可达", "error");
+            hints.push(`${PANELS[id].labelEl.textContent}: ${r.message || r.hint}`);
+          }
+        }
+        healthBanner.classList.add("visible");
+        if (allOk) {
+          healthBanner.className = "health-banner visible ok";
+          healthBanner.textContent = "两台远程 vLLM 均已连通，可以发送问题对比。";
+        } else {
+          healthBanner.className = "health-banner visible fail";
+          healthBanner.textContent =
+            "远程服务未就绪，请先排查再提问。详情：" + hints.join(" | ");
+        }
+      } catch (e) {
+        healthBanner.className = "health-banner visible warn";
+        healthBanner.textContent = "无法执行连通性检测：" + e;
+      }
     }
 
     function connect() {
@@ -512,7 +612,7 @@
             appendToken(panel, msg.text || "");
             break;
           case "done":
-            finishAssistant(panel, msg.table || "");
+            finishAssistant(panel, msg.metrics);
             panelDone(panel);
             break;
           case "cancelled":
@@ -528,7 +628,10 @@
             setPanelStatus(panel, "失败", "error");
             if (PANELS[panel].assistantBubble) {
               PANELS[panel].assistantBubble.classList.remove("streaming");
-              PANELS[panel].assistantBubble.textContent += "\n\n[错误] " + (msg.message || "");
+              const errPre = document.createElement("pre");
+              errPre.style.cssText = "margin-top:0.5rem;font-size:0.75rem;color:#b91c1c;white-space:pre-wrap;";
+              errPre.textContent = msg.message || "错误";
+              PANELS[panel].assistantBubble.closest(".msg").appendChild(errPre);
               PANELS[panel].assistantBubble = null;
             }
             if (PANELS[panel].pending) panelDone(panel);
@@ -551,12 +654,6 @@
       promptInput.style.height = "auto";
     });
 
-    stopBtn.addEventListener("click", () => {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ action: "cancel" }));
-      }
-    });
-
     promptInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
@@ -570,6 +667,7 @@
     });
 
     loadConfig();
+    loadHealth();
     connect();
   </script>
 </body>

@@ -56,11 +56,30 @@ per-request `ais_bench` table.
 
 **Connectivity checklist**
 
-1. vLLM must already be listening on `8004` on both remote machines.
-2. From the local PC, verify reachability, e.g. `curl http://199.147.1.2:8004/v1/models`
-   and the same for `.1.3` (firewall / VPN / routing must allow it).
-3. Start `web_demo.py` on the local PC; do **not** open the HTML file directly
+1. vLLM must already be listening on `8004` on both remote machines (bind
+   `0.0.0.0`, not only `127.0.0.1`).
+2. On the **local exhibition PC**, run the probe script (prints detailed hints):
+
+   ```bash
+   python check_backends.py
+   ```
+
+   Or use `curl.exe` on Windows:
+
+   ```bash
+   curl.exe http://199.147.1.2:8004/v1/models
+   curl.exe http://199.147.1.3:8004/v1/models
+   ```
+
+   Both must return HTTP 200 JSON, not `502` / timeout.
+3. If you see **HTTP 502 with an empty body**, it is usually **not** a bug in
+   this demo: something in the path (Nginx gateway, or the PC's `HTTP_PROXY`)
+   answered instead of vLLM. The demo disables system proxy by default; if you
+   still get 502, check that vLLM is running behind any reverse proxy and that
+   the proxy upstream points to the real port.
+4. Start `web_demo.py` on the local PC; do **not** open the HTML file directly
    (`file://`) — always use the URL printed by the server so WebSocket works.
+   On startup and in the web UI, `/api/health` reports per-panel reachability.
 
 The terminal REPL (`python demo.py`) is unchanged and talks to a single backend.
 

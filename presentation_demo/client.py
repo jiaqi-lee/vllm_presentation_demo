@@ -22,6 +22,7 @@ from typing import Optional, TextIO
 import httpx
 
 from presentation_demo.config import DemoConfig
+from presentation_demo.health import _hint_for_status
 from presentation_demo.metrics import RequestMetrics
 
 
@@ -40,7 +41,10 @@ class StreamingChatClient:
             write=30.0,
             pool=10.0,
         )
-        self._client = httpx.AsyncClient(timeout=timeout)
+        self._client = httpx.AsyncClient(
+            timeout=timeout,
+            trust_env=config.trust_env,
+        )
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -86,8 +90,9 @@ class StreamingChatClient:
                 ) as response:
                     if response.status_code >= 400:
                         body = (await response.aread()).decode("utf-8", "replace")
+                        hint = _hint_for_status(response.status_code, body)
                         raise StreamingError(
-                            f"HTTP {response.status_code} from {url}: {body.strip()[:500]}"
+                            f"HTTP {response.status_code} from {url}\n{hint}"
                         )
                     async for line in response.aiter_lines():
                         if not line:
@@ -131,8 +136,10 @@ class StreamingChatClient:
             metrics.error_info = str(exc)
             return metrics
         except httpx.HTTPError as exc:
+            from presentation_demo.health import _hint_for_exception
+
             metrics.success = False
-            metrics.error_info = f"{type(exc).__name__}: {exc}"
+            metrics.error_info = _hint_for_exception(exc)
             return metrics
         except Exception as exc:  # noqa: BLE001 - keep REPL alive on unknowns
             metrics.success = False

@@ -17,8 +17,11 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 
+import os
+
 from presentation_demo.client import StreamingChatClient
 from presentation_demo.config import DemoConfig, build_arg_parser
+from presentation_demo.health import probe_all
 from presentation_demo.table import render_metrics
 from presentation_demo.web_sink import WebTokenSink
 
@@ -30,6 +33,10 @@ DEFAULT_URL_BOTTOM = "http://199.147.1.3:8004"
 
 PANEL_TOP = "top"
 PANEL_BOTTOM = "bottom"
+
+# Exhibition-facing panel titles (hide real backend host:port in the browser).
+PANEL_LABEL_TOP = "不开启特性"
+PANEL_LABEL_BOTTOM = "开启特性后"
 
 
 @dataclass(frozen=True)
@@ -57,32 +64,25 @@ def build_dual_panels(
     temperature: float,
     enable_thinking: bool,
     timeout: float,
+    trust_env: bool = False,
 ) -> List[PanelBackend]:
-    def _label(url: str) -> str:
-        # Show host:port in the UI header.
-        stripped = url.rstrip("/")
-        if stripped.startswith("http://"):
-            return stripped[len("http://") :]
-        if stripped.startswith("https://"):
-            return stripped[len("https://") :]
-        return stripped
-
     common = dict(
         model=model,
         max_tokens=max_tokens,
         temperature=temperature,
         enable_thinking=enable_thinking,
         timeout=timeout,
+        trust_env=trust_env,
     )
     return [
         PanelBackend(
             panel_id=PANEL_TOP,
-            label=_label(url_top),
+            label=PANEL_LABEL_TOP,
             config=DemoConfig(base_url=url_top, **common),
         ),
         PanelBackend(
             panel_id=PANEL_BOTTOM,
-            label=_label(url_bottom),
+            label=PANEL_LABEL_BOTTOM,
             config=DemoConfig(base_url=url_bottom, **common),
         ),
     ]
@@ -107,6 +107,14 @@ def create_app(panels: List[PanelBackend]) -> FastAPI:
                 pid: _panel_summary(p) for pid, p in app.state.panels.items()
             },
         }
+
+    @app.get("/api/health")
+    async def health() -> Dict[str, Any]:
+        panel_map: Dict[str, PanelBackend] = app.state.panels
+        probes = await probe_all(
+            [(pid, p.config) for pid, p in panel_map.items()]
+        )
+        return {"panels": probes}
 
     @app.websocket("/ws")
     async def chat_ws(websocket: WebSocket) -> None:
@@ -309,9 +317,38 @@ def build_web_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _print_proxy_notice(trust_env: bool) -> None:
+    proxy = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
+    if proxy and not trust_env:
+        print(
+            f"  [note] Detected system proxy {proxy!r} — ignored (direct LAN access).\n"
+            f"         If you need the proxy, restart with --use-system-proxy.\n"
+        )
+    elif proxy and trust_env:
+        print(f"  [note] Using system proxy: {proxy!r}\n")
+
+
+async def _print_startup_health(panels: List[PanelBackend]) -> None:
+    print("  Checking remote backends (/v1/models)...\n")
+    probes = await probe_all([(p.panel_id, p.config) for p in panels])
+    for panel in panels:
+        r = probes[panel.panel_id]
+        label = panel.label
+        if r.get("ok"):
+            models = r.get("models") or []
+            print(f"  [OK]   {label}  ({r.get('latency_ms')} ms)  models={models[:3]}")
+            if r.get("hint"):
+                print(f"         warning: {r['hint']}")
+        else:
+            print(f"  [FAIL] {label}")
+            print(f"         {r.get('message', 'unknown error')}")
+    print()
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = build_web_arg_parser()
     args = parser.parse_args(argv)
+    trust_env = getattr(args, "use_system_proxy", False)
     panels = build_dual_panels(
         url_top=args.url_top,
         url_bottom=args.url_bottom,
@@ -320,6 +357,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         temperature=args.temperature,
         enable_thinking=args.enable_thinking,
         timeout=args.timeout,
+        trust_env=trust_env,
     )
 
     import uvicorn
@@ -332,9 +370,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         f"  Open http://127.0.0.1:{args.port} on this PC\n"
         f"  Upper panel -> {top.config.chat_completions_url}\n"
         f"  Lower panel -> {bottom.config.chat_completions_url}\n"
-        f"\n"
-        f"  Ensure this PC can reach both servers on port 8004 "
-        f"(firewall / VPN / routing).\n"
     )
+    _print_proxy_notice(trust_env)
+    asyncio.run(_print_startup_health(panels))
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     return 0
