@@ -42,9 +42,9 @@ def build_common_table(m: RequestMetrics) -> List[List[str]]:
     rows.append(["E2EL", _fmt_ms(m.latency)])
     rows.append(["TTFT", _fmt_ms(m.ttft)])
     rows.append(["TPOT", _fmt_ms(m.tpot)])
-    rows.append(["Request Throughput", _fmt_req_per_s(m.request_throughput)])
     rows.append(["Total Input Tokens", str(m.total_input_tokens)])
     rows.append(["Total Generated Tokens", str(m.total_generated_tokens)])
+    rows.append(["Request Throughput", _fmt_req_per_s(m.request_throughput)])
     rows.append(
         ["Total Token Throughput", _fmt_tokens_per_s(m.total_token_throughput)]
     )
