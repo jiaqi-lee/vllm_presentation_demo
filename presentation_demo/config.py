@@ -17,12 +17,15 @@ Defaults mirror the curl template in the requirements doc:
 from __future__ import annotations
 
 import argparse
+import socket
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict
 from urllib.parse import urljoin
 
 
-DEFAULT_BASE_URL = "http://127.0.0.1:8004"
+#DEFAULT_BASE_URL = "http://127.0.0.1:8004"
+CURRENT_IP = socket.gethostbyname(socket.gethostname())
+DEFAULT_BASE_URL = f"http://{CURRENT_IP}:8004"
 DEFAULT_MODEL = "minimax"
 DEFAULT_MAX_TOKENS = 200
 DEFAULT_TEMPERATURE = 0.0
