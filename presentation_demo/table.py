@@ -8,9 +8,8 @@ Table 1 (Request level):
     rows:    TTFT, TPOT, ITL, InputTokens, OutputTokens, E2EL, OutputTokenThroughput
 
 Table 2 (Common metric):
-    columns: Common Metric | Stage | Value
-    rows:    Benchmark Duration / Total Requests / Failed Requests / Success Requests /
-             Concurrency / Max Concurrency / Request Throughput /
+    columns: Common Metric | Value
+    rows:    Benchmark Duration / Request Throughput /
              Total Input Tokens / Prefill Token Throughput / Total Generated Tokens /
              Input Token Throughput / Output Token Throughput / Total Token Throughput
 
@@ -108,50 +107,42 @@ def build_request_table(m: RequestMetrics) -> List[List[str]]:
 def build_common_table(m: RequestMetrics) -> List[List[str]]:
     """Build the common-metric (key/value) table.
 
-    Order and units follow ais_bench's _add_units_to_common_metrics so the
-    visual output is indistinguishable from a real ais_bench run.
+    Order and units follow ais_bench's _add_units_to_common_metrics. The Stage
+    column and request-count / concurrency rows are omitted for a cleaner demo
+    display.
     """
-    rows: List[List[str]] = [["Common Metric", "Stage", "Value"]]
+    rows: List[List[str]] = [["Common Metric", "Value"]]
 
-    rows.append(["Benchmark Duration", STAGE_NAME, _fmt_ms(m.infer_time)])
-    rows.append(["Total Requests", STAGE_NAME, "1"])
-    rows.append(["Failed Requests", STAGE_NAME, "0" if m.success else "1"])
-    rows.append(["Success Requests", STAGE_NAME, "1" if m.success else "0"])
-    rows.append(["Concurrency", STAGE_NAME, f"{round(m.concurrency, 4)}"])
-    rows.append(["Max Concurrency", STAGE_NAME, f"{m.max_concurrency}"])
+    rows.append(["Benchmark Duration", _fmt_ms(m.infer_time)])
     rows.append(
-        ["Request Throughput", STAGE_NAME, _fmt_req_per_s(m.request_throughput)]
+        ["Request Throughput", _fmt_req_per_s(m.request_throughput)]
     )
-    rows.append(["Total Input Tokens", STAGE_NAME, str(m.total_input_tokens)])
+    rows.append(["Total Input Tokens", str(m.total_input_tokens)])
     if m.prefill_token_throughput is not None:
         rows.append(
             [
                 "Prefill Token Throughput",
-                STAGE_NAME,
                 _fmt_tokens_per_s(m.prefill_token_throughput),
             ]
         )
     rows.append(
-        ["Total Generated Tokens", STAGE_NAME, str(m.total_generated_tokens)]
+        ["Total Generated Tokens", str(m.total_generated_tokens)]
     )
     rows.append(
         [
             "Input Token Throughput",
-            STAGE_NAME,
             _fmt_tokens_per_s(m.input_token_throughput),
         ]
     )
     rows.append(
         [
             "Output Token Throughput",
-            STAGE_NAME,
             _fmt_tokens_per_s(m.output_token_throughput),
         ]
     )
     rows.append(
         [
             "Total Token Throughput",
-            STAGE_NAME,
             _fmt_tokens_per_s(m.total_token_throughput),
         ]
     )
