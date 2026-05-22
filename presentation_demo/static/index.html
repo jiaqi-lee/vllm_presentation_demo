@@ -319,6 +319,26 @@
     .btn-primary { background: var(--accent-top); color: white; }
     .btn-ghost { background: transparent; color: var(--text-muted); }
 
+    .btn-auto {
+      background: #f1f5f9;
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      white-space: nowrap;
+    }
+
+    .btn-auto.active {
+      background: #ecfdf5;
+      color: #047857;
+      border-color: #6ee7b7;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      flex-shrink: 0;
+    }
+
     .error-toast {
       position: fixed;
       bottom: 4.5rem;
@@ -344,7 +364,10 @@
       <h1>vLLM-Ascend 双机流式对比</h1>
       <p>同一问题同时发往两台远程服务，上下分屏对比速度与性能表</p>
     </div>
-    <span id="statusPill" class="status-pill disconnected">连接本地代理…</span>
+    <div class="header-actions">
+      <button type="button" id="autoLoopBtn" class="btn btn-auto" title="开启后自动循环向两台服务发送固定问题，每轮等待双机均返回后再发下一轮">自动循环演示</button>
+      <span id="statusPill" class="status-pill disconnected">连接本地代理…</span>
+    </div>
   </header>
 
   <div id="healthBanner" class="health-banner" role="status"></div>
@@ -404,13 +427,19 @@
     const promptInput = document.getElementById("promptInput");
     const chatForm = document.getElementById("chatForm");
     const sendBtn = document.getElementById("sendBtn");
+    const autoLoopBtn = document.getElementById("autoLoopBtn");
     const statusPill = document.getElementById("statusPill");
     const errorToast = document.getElementById("errorToast");
     const healthBanner = document.getElementById("healthBanner");
 
+    const AUTO_PROMPT =
+      "请总结vllm-ascend在华为昇腾NPU上的核心加速特性，包括：PCP/DCP上下文并行、PrefixCache和池化mooncake、aclgraph图模式、MegaMoE融合算子。";
+
     let ws = null;
     let globalBusy = false;
     let pendingCount = 0;
+    let autoLoopEnabled = false;
+    let autoLoopTimer = null;
     let toastTimer = null;
 
     function setGlobalStatus(text, cls) {
@@ -434,12 +463,62 @@
 
     function updateBusyState() {
       globalBusy = pendingCount > 0;
-      sendBtn.disabled = globalBusy || !ws || ws.readyState !== WebSocket.OPEN;
-      promptInput.disabled = globalBusy;
-      setGlobalStatus(
-        globalBusy ? "双机生成中…" : "已就绪",
-        globalBusy ? "streaming" : (ws && ws.readyState === WebSocket.OPEN ? "" : "disconnected")
-      );
+      const connected = ws && ws.readyState === WebSocket.OPEN;
+      sendBtn.disabled = globalBusy || !connected || autoLoopEnabled;
+      promptInput.disabled = globalBusy || autoLoopEnabled;
+      autoLoopBtn.disabled = !connected;
+      let statusText = "已就绪";
+      let statusCls = connected ? "" : "disconnected";
+      if (autoLoopEnabled) {
+        statusText = globalBusy ? "自动演示 · 双机生成中…" : "自动演示 · 等待下一轮…";
+        statusCls = globalBusy ? "streaming" : "";
+      } else if (globalBusy) {
+        statusText = "双机生成中…";
+        statusCls = "streaming";
+      } else if (!connected) {
+        statusText = "已断开";
+      }
+      setGlobalStatus(statusText, statusCls);
+    }
+
+    function updateAutoLoopButton() {
+      autoLoopBtn.classList.toggle("active", autoLoopEnabled);
+      autoLoopBtn.textContent = autoLoopEnabled ? "自动循环演示 · 运行中" : "自动循环演示";
+    }
+
+    function clearAutoLoopTimer() {
+      if (autoLoopTimer !== null) {
+        clearTimeout(autoLoopTimer);
+        autoLoopTimer = null;
+      }
+    }
+
+    function sendPrompt(text) {
+      if (!text || !ws || ws.readyState !== WebSocket.OPEN || globalBusy) return false;
+      appendUserMessage("top", text);
+      appendUserMessage("bottom", text);
+      ws.send(JSON.stringify({ action: "chat", prompt: text }));
+      return true;
+    }
+
+    function scheduleNextAutoLoop() {
+      clearAutoLoopTimer();
+      if (!autoLoopEnabled || globalBusy || !ws || ws.readyState !== WebSocket.OPEN) return;
+      autoLoopTimer = setTimeout(() => {
+        autoLoopTimer = null;
+        if (autoLoopEnabled && !globalBusy) sendPrompt(AUTO_PROMPT);
+      }, 400);
+    }
+
+    function setAutoLoopEnabled(enabled) {
+      autoLoopEnabled = enabled;
+      updateAutoLoopButton();
+      updateBusyState();
+      if (autoLoopEnabled) {
+        if (!globalBusy) sendPrompt(AUTO_PROMPT);
+      } else {
+        clearAutoLoopTimer();
+      }
     }
 
     function clearWelcome(panelId) {
@@ -519,6 +598,7 @@
       pendingCount = Math.max(0, pendingCount - 1);
       setPanelStatus(panelId, "完成", "");
       updateBusyState();
+      if (pendingCount === 0) scheduleNextAutoLoop();
     }
 
     function applyConfig(data) {
@@ -577,14 +657,13 @@
       ws = new WebSocket(proto + "//" + location.host + "/ws");
 
       ws.onopen = () => {
-        setGlobalStatus("已就绪", "");
-        sendBtn.disabled = false;
+        updateBusyState();
         ws.send(JSON.stringify({ action: "config" }));
+        if (autoLoopEnabled && !globalBusy) scheduleNextAutoLoop();
       };
 
       ws.onclose = () => {
-        setGlobalStatus("已断开", "disconnected");
-        sendBtn.disabled = true;
+        clearAutoLoopTimer();
         pendingCount = 0;
         updateBusyState();
         setTimeout(connect, 2000);
@@ -643,13 +722,15 @@
       };
     }
 
+    autoLoopBtn.addEventListener("click", () => {
+      setAutoLoopEnabled(!autoLoopEnabled);
+    });
+
     chatForm.addEventListener("submit", (e) => {
       e.preventDefault();
+      if (autoLoopEnabled) return;
       const text = promptInput.value.trim();
-      if (!text || !ws || ws.readyState !== WebSocket.OPEN || globalBusy) return;
-      appendUserMessage("top", text);
-      appendUserMessage("bottom", text);
-      ws.send(JSON.stringify({ action: "chat", prompt: text }));
+      if (!sendPrompt(text)) return;
       promptInput.value = "";
       promptInput.style.height = "auto";
     });
